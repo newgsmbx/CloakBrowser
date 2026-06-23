@@ -14,10 +14,6 @@
 <a href="https://hub.docker.com/r/cloakhq/cloakbrowser"><img src="https://img.shields.io/docker/pulls/cloakhq/cloakbrowser?label=docker&logo=docker&logoColor=white" alt="Docker Pulls"></a>
 </p>
 
-<p align="center">
-<a href="https://ko-fi.com/cloakhq"><img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Support on Ko-fi"></a>
-</p>
-
 <br>
 
 <h3 align="center">Stealth Chromium that passes every bot detection test.</h3>
