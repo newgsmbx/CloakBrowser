@@ -9,6 +9,9 @@ import {
   validateLicense,
   getProLatestVersion,
   buildLaunchEnv,
+  licenseErrorMessage,
+  licenseErrorFrom,
+  CloakBrowserLicenseError,
 } from "../src/license.js";
 
 import * as config from "../src/config.js";
@@ -407,5 +410,50 @@ describe("buildLaunchEnv", () => {
   it("empty licenseKey treated as missing", () => {
     expect(buildLaunchEnv("")).toBeUndefined();
     expect(buildLaunchEnv("   ")).toBeUndefined();
+  });
+});
+
+describe("license exit-code surfacing", () => {
+  const playwrightText = (code: number) =>
+    "BrowserType.launch: Target page, context or browser has been closed\n" +
+    `Browser logs:\n- [pid=123] <process did exit: exitCode=${code}, signal=null>`;
+  const puppeteerText = (code: number) =>
+    `Failed to launch the browser process!\nBrowser process exited with code ${code}`;
+
+  it.each([
+    [76, "session limit"],
+    [77, "invalid, expired, or missing"],
+    [78, "couldn't verify"],
+    [79, "not writable"],
+  ])("maps Playwright exitCode=%i", (code, fragment) => {
+    const msg = licenseErrorMessage(playwrightText(code as number));
+    expect(msg).not.toBeNull();
+    expect(msg).toContain(fragment as string);
+    expect(msg!.startsWith("CloakBrowser Pro:")).toBe(true);
+  });
+
+  it("maps the Puppeteer 'exited with code N' phrasing", () => {
+    expect(licenseErrorMessage(puppeteerText(76))).toContain("session limit");
+    expect(licenseErrorMessage(puppeteerText(77))).toContain("invalid");
+  });
+
+  it("returns null for a non-license exit code (passthrough)", () => {
+    expect(licenseErrorMessage(playwrightText(1))).toBeNull();
+    expect(licenseErrorMessage(puppeteerText(139))).toBeNull();
+    // Large SEH-style code (Windows access violation 0xC0000005) must not
+    // false-match or overflow.
+    expect(licenseErrorMessage(playwrightText(3221225477))).toBeNull();
+  });
+
+  it("returns null when the text has no exit code (bare TargetClosedError)", () => {
+    expect(licenseErrorMessage("Target page, context or browser has been closed")).toBeNull();
+    expect(licenseErrorMessage("")).toBeNull();
+  });
+
+  it("licenseErrorFrom returns a typed error for a license exit, else null", () => {
+    const lic = licenseErrorFrom(new Error(playwrightText(77)));
+    expect(lic).toBeInstanceOf(CloakBrowserLicenseError);
+    expect(lic!.message).toContain("invalid");
+    expect(licenseErrorFrom(new Error("some unrelated crash"))).toBeNull();
   });
 });

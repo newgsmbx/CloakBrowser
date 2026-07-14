@@ -434,4 +434,57 @@ public class LicenseTests : IDisposable
         // Only the user env + injected key — NOT the full parent environment.
         Assert.Equal(2, result.Count);
     }
+
+    // ── license exit-code surfacing ───────────────────────
+
+    private static string LaunchText(int code) =>
+        "BrowserType.LaunchAsync: Target page, context or browser has been closed\n" +
+        $"Browser logs:\n- [pid=123] <process did exit: exitCode={code}, signal=null>";
+
+    [Theory]
+    [InlineData(76, "session limit")]
+    [InlineData(77, "invalid, expired, or missing")]
+    [InlineData(78, "couldn't verify")]
+    [InlineData(79, "not writable")]
+    public void LicenseErrorMessage_MapsKnownCodes(int code, string fragment)
+    {
+        var msg = License.LicenseErrorMessage(LaunchText(code));
+        Assert.NotNull(msg);
+        Assert.StartsWith("CloakBrowser Pro:", msg);
+        Assert.Contains(fragment, msg);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(139)]
+    public void LicenseErrorMessage_NonLicenseCode_ReturnsNull(int code)
+    {
+        Assert.Null(License.LicenseErrorMessage(LaunchText(code)));
+    }
+
+    [Fact]
+    public void LicenseErrorMessage_LargeSehCode_DoesNotThrowOrMatch()
+    {
+        // Windows access violation 0xC0000005 = 3221225477, > int.MaxValue.
+        // Must not overflow int.Parse (which would mask the original launch error).
+        Assert.Null(License.LicenseErrorMessage("<process did exit: exitCode=3221225477, signal=null>"));
+    }
+
+    [Fact]
+    public void LicenseErrorMessage_NoCode_ReturnsNull()
+    {
+        Assert.Null(License.LicenseErrorMessage("Target page, context or browser has been closed"));
+        Assert.Null(License.LicenseErrorMessage(""));
+        Assert.Null(License.LicenseErrorMessage(null));
+    }
+
+    [Fact]
+    public void LicenseErrorFrom_ReturnsTypedErrorOrNull()
+    {
+        var lic = License.LicenseErrorFrom(new Exception(LaunchText(77)));
+        Assert.NotNull(lic);
+        Assert.IsType<CloakBrowserLicenseError>(lic);
+        Assert.Contains("invalid", lic!.Message);
+        Assert.Null(License.LicenseErrorFrom(new Exception("some unrelated crash")));
+    }
 }

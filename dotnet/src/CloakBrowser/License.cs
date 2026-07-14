@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace CloakBrowser;
 
@@ -9,6 +10,19 @@ namespace CloakBrowser;
 /// Mirrors the Python <c>LicenseInfo</c> dataclass / JS <c>LicenseInfo</c> interface.
 /// </summary>
 public sealed record LicenseInfo(bool Valid, string Plan, string? Expires);
+
+/// <summary>
+/// The Pro binary refused to run for a license reason. Thrown when a launch fails
+/// and the browser process exited with one of the Pro binary's license exit codes,
+/// carrying a human-readable reason instead of the opaque "target/browser closed"
+/// error the caller would otherwise see. Mirrors Python/JS
+/// <c>CloakBrowserLicenseError</c>.
+/// </summary>
+public sealed class CloakBrowserLicenseError : Exception
+{
+    public CloakBrowserLicenseError(string message) : base(message) { }
+    public CloakBrowserLicenseError(string message, Exception inner) : base(message, inner) { }
+}
 
 /// <summary>
 /// Source of a resolved license key.  Determines whether env injection
@@ -53,6 +67,49 @@ public static class License
         var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
         client.DefaultRequestHeaders.UserAgent.ParseAdd($"cloakbrowser-dotnet/{CloakVersion.Version}");
         return client;
+    }
+
+    // Exit codes the Pro binary uses for honest-user license denials. The binary
+    // emits only the number (no diagnostic strings, by design); the message text
+    // lives here in the wrapper. Mirrors Python _LICENSE_EXIT_MESSAGES / JS
+    // LICENSE_EXIT_MESSAGES.
+    private static readonly Dictionary<int, string> LicenseExitMessages = new()
+    {
+        [76] = "CloakBrowser Pro: session limit reached for your plan. Close another running session or upgrade your plan.",
+        [77] = "CloakBrowser Pro: license key is invalid, expired, or missing. Check CLOAKBROWSER_LICENSE_KEY.",
+        [78] = "CloakBrowser Pro: couldn't verify your license (license server unreachable or a connection problem).",
+        [79] = "CloakBrowser Pro: local configuration problem, ~/.cloakbrowser is not writable.",
+    };
+
+    // Playwright embeds the child-process exit as "<process did exit: exitCode=N, ...>".
+    // Anchor to that record so an unrelated "exitCode=" elsewhere can't false-match.
+    private static readonly Regex ExitCodeRegex = new(@"process did exit:\s*exitCode=(\d+)", RegexOptions.Compiled);
+
+    /// <summary>
+    /// Maps a launch-failure message to a license reason, or null. Returns the human
+    /// message when the browser process exited with a known license exit code, else
+    /// null so a genuine crash propagates unchanged.
+    /// </summary>
+    public static string? LicenseErrorMessage(string? errorText)
+    {
+        if (string.IsNullOrEmpty(errorText)) return null;
+        var match = ExitCodeRegex.Match(errorText);
+        if (!match.Success) return null;
+        // TryParse, not Parse: a non-license crash can carry a huge exit code
+        // (e.g. Windows SEH status 3221225477) that would overflow int and, since
+        // this runs inside the launch catch block, mask the original error.
+        if (!int.TryParse(match.Groups[1].Value, out var code)) return null;
+        return LicenseExitMessages.TryGetValue(code, out var msg) ? msg : null;
+    }
+
+    /// <summary>
+    /// Returns a <see cref="CloakBrowserLicenseError"/> if a launch failure was a
+    /// license deny, else null so the original exception propagates unchanged.
+    /// </summary>
+    public static CloakBrowserLicenseError? LicenseErrorFrom(Exception ex)
+    {
+        var msg = LicenseErrorMessage(ex.Message);
+        return msg is not null ? new CloakBrowserLicenseError(msg, ex) : null;
     }
 
     // -----------------------------------------------------------------------

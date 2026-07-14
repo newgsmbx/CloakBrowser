@@ -10,6 +10,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,6 +33,56 @@ class LicenseInfo:
     valid: bool
     plan: str
     expires: str | None
+
+
+class CloakBrowserLicenseError(RuntimeError):
+    """The Pro binary refused to run for a license reason.
+
+    Raised when a launch fails and the browser process exited with one of the
+    Pro binary's license exit codes (see ``_LICENSE_EXIT_MESSAGES``). Carries a
+    human-readable reason instead of the opaque "target/browser closed" error
+    the caller would otherwise see.
+    """
+
+
+# Exit codes the Pro binary uses for honest-user license denials. The binary
+# emits only the number (no diagnostic strings, by design); the message text
+# lives here in the wrapper.
+_LICENSE_EXIT_MESSAGES = {
+    76: (
+        "CloakBrowser Pro: session limit reached for your plan. Close another "
+        "running session or upgrade your plan."
+    ),
+    77: (
+        "CloakBrowser Pro: license key is invalid, expired, or missing. Check "
+        "CLOAKBROWSER_LICENSE_KEY."
+    ),
+    78: (
+        "CloakBrowser Pro: couldn't verify your license (license server "
+        "unreachable or a connection problem)."
+    ),
+    79: (
+        "CloakBrowser Pro: local configuration problem, ~/.cloakbrowser "
+        "is not writable."
+    ),
+}
+
+# Playwright reports a child-process exit in the launch-failure text as
+# "<process did exit: exitCode=N, signal=null>". Anchor to that record so an
+# unrelated "exitCode=" elsewhere in the error can't false-match.
+_EXIT_CODE_RE = re.compile(r"process did exit:\s*exitCode=(\d+)")
+
+
+def license_error_message(error_text: str) -> str | None:
+    """Map a launch-failure message to a license reason, or None.
+
+    Returns the human message when the browser process exited with a known
+    license exit code, else None so a genuine crash propagates unchanged.
+    """
+    match = _EXIT_CODE_RE.search(error_text or "")
+    if not match:
+        return None
+    return _LICENSE_EXIT_MESSAGES.get(int(match.group(1)))
 
 
 _LICENSE_KEY_SOURCE_PARAM = "param"
